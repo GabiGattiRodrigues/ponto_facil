@@ -10,8 +10,8 @@ script todo dia num horário fixo, direto nos servidores do GitHub.
 
 Pré-requisito: a variável de ambiente DATABASE_URL precisa apontar pro
 banco Postgres (Supabase) que o app hospedado também usa — é de lá que
-esse script lê as empresas/pontos E a configuração do Telegram (token,
-chat ID, nome), configurada uma vez na tela "⚙️ Configurações" do app.
+esse script lê as empresas/pontos E a configuração do Telegram de cada
+destinatário, configurada na tela "⚙️ Configurações" do app.
 
 Uso manual (pra testar):
     DATABASE_URL="postgresql://..." python notificar_pendencias.py
@@ -47,63 +47,68 @@ def main():
 
     db.init_db()
 
-    token = db.obter_config("telegram_bot_token")
-    chat_id = db.obter_config("telegram_chat_id")
-    nome = db.obter_config("nome_usuario") or ""
-
-    if not token or not chat_id:
+    destinatarios = db.listar_destinatarios_telegram()
+    if not destinatarios:
         print(
-            "ERRO: Telegram não configurado ainda. Configure o token e o "
-            "chat ID na tela '⚙️ Configurações' do app antes de agendar "
-            "esse script.",
+            "ERRO: Nenhum destinatário do Telegram configurado ainda. "
+            "Configure ao menos um na tela '⚙️ Configurações' do app antes "
+            "de agendar esse script.",
             file=sys.stderr,
         )
         sys.exit(1)
-
-    hoje = date.today()
-    ja_notificado_hoje = db.obter_config("ultima_notificacao_data") == hoje.isoformat()
-    if ja_notificado_hoje and not args.forcar:
-        print(f"Já notificado hoje ({hoje.isoformat()}). Nada a fazer. Use --forcar para reenviar.")
-        return
 
     empresas = db.listar_empresas()
     if not empresas:
         print("Nenhuma empresa cadastrada. Nada a notificar.")
         return
+    empresas_por_id = {e["id"]: e for e in empresas}
 
-    ids_selecionados_str = db.obter_config("telegram_empresas_ids")  # None = todas
-    if ids_selecionados_str is not None:
-        ids_selecionados = {int(i) for i in ids_selecionados_str.split(",") if i.strip().isdigit()}
-        empresas = [e for e in empresas if e["id"] in ids_selecionados]
-        if not empresas:
-            print("Nenhuma empresa selecionada pra receber alerta (veja Configurações no app). Nada a notificar.")
-            return
+    hoje = date.today()
+    houve_erro = False
 
-    blocos = []
-    for empresa in empresas:
-        faltando = utils.dias_uteis_sem_registro(empresa, janela_dias=14)
-        if faltando:
-            dias_fmt = ", ".join(utils.formatar_data_br(d) for d in faltando[-5:])
-            a_mais = f" (+{len(faltando) - 5} dia(s) anterior(es))" if len(faltando) > 5 else ""
-            blocos.append(f"• *{empresa['nome']}*: {dias_fmt}{a_mais}")
+    for destinatario in destinatarios:
+        ja_notificado_hoje = destinatario["ultima_notificacao_data"] == hoje.isoformat()
+        if ja_notificado_hoje and not args.forcar:
+            print(f"[{destinatario['nome']}] Já notificado hoje. Pulando (use --forcar para reenviar).")
+            continue
 
-    if not blocos:
-        print("Tudo em dia em todas as empresas. Nenhuma mensagem enviada (só avisamos quando falta algo).")
-        return
+        ids_str = destinatario["empresas_ids"] or ""
+        ids_selecionados = {int(i) for i in ids_str.split(",") if i.strip().isdigit()}
+        empresas_do_destinatario = [empresas_por_id[i] for i in ids_selecionados if i in empresas_por_id]
+        if not empresas_do_destinatario:
+            print(f"[{destinatario['nome']}] Nenhuma empresa selecionada pra ele(a). Nada a notificar.")
+            continue
 
-    saudacao = f"Oi {nome}! " if nome else "Oi! "
-    texto = (
-        f"{saudacao}🔔 *Ponto Fácil* — você está sem registro de ponto em:\n\n"
-        + "\n".join(blocos)
-        + "\n\nNão esquece de bater o ponto! 🕒"
-    )
+        blocos = []
+        for empresa in empresas_do_destinatario:
+            faltando = utils.dias_uteis_sem_registro(empresa, janela_dias=14)
+            if faltando:
+                dias_fmt = ", ".join(utils.formatar_data_br(d) for d in faltando[-5:])
+                a_mais = f" (+{len(faltando) - 5} dia(s) anterior(es))" if len(faltando) > 5 else ""
+                blocos.append(f"• *{empresa['nome']}*: {dias_fmt}{a_mais}")
 
-    sucesso, erro = telegram_notify.enviar_mensagem(token, chat_id, texto)
-    if sucesso:
-        db.definir_config("ultima_notificacao_data", hoje.isoformat())
-        print("Mensagem enviada com sucesso.")
-    else:
-        print(f"ERRO ao enviar mensagem: {erro}", file=sys.stderr)
+        if not blocos:
+            print(f"[{destinatario['nome']}] Tudo em dia. Nenhuma mensagem enviada.")
+            continue
+
+        saudacao = f"Oi {destinatario['nome']}! " if destinatario["nome"] else "Oi! "
+        texto = (
+            f"{saudacao}🔔 *Ponto Fácil* — você está sem registro de ponto em:\n\n"
+            + "\n".join(blocos)
+            + "\n\nNão esquece de bater o ponto! 🕒"
+        )
+
+        sucesso, erro = telegram_notify.enviar_mensagem(
+            destinatario["bot_token"], destinatario["chat_id"], texto
+        )
+        if sucesso:
+            db.definir_ultima_notificacao_destinatario(destinatario["id"], hoje.isoformat())
+            print(f"[{destinatario['nome']}] Mensagem enviada com sucesso.")
+        else:
+            print(f"[{destinatario['nome']}] ERRO ao enviar mensagem: {erro}", file=sys.stderr)
+            houve_erro = True
+
+    if houve_erro:
         sys.exit(1)
 
 
