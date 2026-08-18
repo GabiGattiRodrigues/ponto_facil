@@ -111,7 +111,17 @@ _SCHEMA_SQLITE = """
         uf TEXT NOT NULL,
         carga_horaria_diaria REAL NOT NULL,
         intervalo_almoco_minutos INTEGER NOT NULL DEFAULT 60,
+        responsavel TEXT NOT NULL DEFAULT '',
         criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS destinatarios_telegram (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        bot_token TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        empresas_ids TEXT NOT NULL DEFAULT '',
+        ultima_notificacao_data TEXT
     );
 
     CREATE TABLE IF NOT EXISTS feriados_municipais (
@@ -157,7 +167,17 @@ _SCHEMA_POSTGRES = """
         uf TEXT NOT NULL,
         carga_horaria_diaria REAL NOT NULL,
         intervalo_almoco_minutos INTEGER NOT NULL DEFAULT 60,
+        responsavel TEXT NOT NULL DEFAULT '',
         criado_em TEXT NOT NULL DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+    );
+
+    CREATE TABLE IF NOT EXISTS destinatarios_telegram (
+        id SERIAL PRIMARY KEY,
+        nome TEXT NOT NULL,
+        bot_token TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        empresas_ids TEXT NOT NULL DEFAULT '',
+        ultima_notificacao_data TEXT
     );
 
     CREATE TABLE IF NOT EXISTS feriados_municipais (
@@ -201,6 +221,7 @@ def init_db():
     with get_conn() as conn:
         conn.executescript(_SCHEMA_POSTGRES if USANDO_POSTGRES else _SCHEMA_SQLITE)
         _migrar_colunas_antigas(conn)
+    _migrar_destinatario_telegram_antigo()
 
 
 def _colunas_existentes(conn, tabela: str) -> set[str]:
@@ -223,6 +244,8 @@ def _migrar_colunas_antigas(conn):
         conn.execute(
             "ALTER TABLE empresas ADD COLUMN intervalo_almoco_minutos INTEGER NOT NULL DEFAULT 60"
         )
+    if "responsavel" not in colunas_empresas:
+        conn.execute("ALTER TABLE empresas ADD COLUMN responsavel TEXT NOT NULL DEFAULT ''")
 
     colunas_pontos = _colunas_existentes(conn, "pontos")
     if "anexo_dados" not in colunas_pontos:
@@ -241,22 +264,22 @@ def _migrar_colunas_antigas(conn):
 # ---------------------------------------------------------------------------
 
 def criar_empresa(nome: str, cidade: str, uf: str, carga_horaria_diaria: float,
-                   intervalo_almoco_minutos: int = 60) -> int:
+                   intervalo_almoco_minutos: int = 60, responsavel: str = "") -> int:
     with get_conn() as conn:
         if USANDO_POSTGRES:
             cur = conn.execute(
-                "INSERT INTO empresas (nome, cidade, uf, carga_horaria_diaria, intervalo_almoco_minutos) "
-                "VALUES (?, ?, ?, ?, ?) RETURNING id",
+                "INSERT INTO empresas (nome, cidade, uf, carga_horaria_diaria, "
+                "intervalo_almoco_minutos, responsavel) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
                 (nome.strip(), cidade.strip(), uf.strip().upper(), carga_horaria_diaria,
-                 intervalo_almoco_minutos),
+                 intervalo_almoco_minutos, responsavel.strip()),
             )
             return cur.fetchone()["id"]
         else:
             cur = conn.execute(
-                "INSERT INTO empresas (nome, cidade, uf, carga_horaria_diaria, intervalo_almoco_minutos) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO empresas (nome, cidade, uf, carga_horaria_diaria, "
+                "intervalo_almoco_minutos, responsavel) VALUES (?, ?, ?, ?, ?, ?)",
                 (nome.strip(), cidade.strip(), uf.strip().upper(), carga_horaria_diaria,
-                 intervalo_almoco_minutos),
+                 intervalo_almoco_minutos, responsavel.strip()),
             )
             return cur.lastrowid
 
@@ -426,3 +449,94 @@ def obter_config(chave: str, padrao: str | None = None) -> str | None:
     with get_conn() as conn:
         row = conn.execute("SELECT valor FROM configuracoes WHERE chave = ?", (chave,)).fetchone()
     return row["valor"] if row else padrao
+
+
+# ---------------------------------------------------------------------------
+# Destinatários do Telegram — cada pessoa que usa o app (ex: você e seu
+# marido) pode ter seu próprio token/chat ID e escolher de quais empresas
+# quer receber alerta, sem afetar o que a outra pessoa recebe.
+# ---------------------------------------------------------------------------
+
+def listar_destinatarios_telegram():
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM destinatarios_telegram ORDER BY nome"
+        ).fetchall()
+
+
+def obter_destinatario_telegram(destinatario_id: int):
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM destinatarios_telegram WHERE id = ?", (destinatario_id,)
+        ).fetchone()
+
+
+def criar_destinatario_telegram(nome: str, bot_token: str, chat_id: str, empresas_ids: str) -> int:
+    with get_conn() as conn:
+        if USANDO_POSTGRES:
+            cur = conn.execute(
+                "INSERT INTO destinatarios_telegram (nome, bot_token, chat_id, empresas_ids) "
+                "VALUES (?, ?, ?, ?) RETURNING id",
+                (nome.strip(), bot_token.strip(), chat_id.strip(), empresas_ids),
+            )
+            return cur.fetchone()["id"]
+        else:
+            cur = conn.execute(
+                "INSERT INTO destinatarios_telegram (nome, bot_token, chat_id, empresas_ids) "
+                "VALUES (?, ?, ?, ?)",
+                (nome.strip(), bot_token.strip(), chat_id.strip(), empresas_ids),
+            )
+            return cur.lastrowid
+
+
+def atualizar_destinatario_telegram(destinatario_id: int, nome: str, bot_token: str,
+                                     chat_id: str, empresas_ids: str):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE destinatarios_telegram SET nome=?, bot_token=?, chat_id=?, empresas_ids=? "
+            "WHERE id=?",
+            (nome.strip(), bot_token.strip(), chat_id.strip(), empresas_ids, destinatario_id),
+        )
+
+
+def excluir_destinatario_telegram(destinatario_id: int):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM destinatarios_telegram WHERE id = ?", (destinatario_id,))
+
+
+def definir_ultima_notificacao_destinatario(destinatario_id: int, data_iso: str):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE destinatarios_telegram SET ultima_notificacao_data=? WHERE id=?",
+            (data_iso, destinatario_id),
+        )
+
+
+def definir_responsavel_empresa(empresa_id: int, responsavel: str):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE empresas SET responsavel=? WHERE id=?", (responsavel.strip(), empresa_id)
+        )
+
+
+def _migrar_destinatario_telegram_antigo():
+    """Versões anteriores guardavam um único token/chat ID globais (chaves
+    'telegram_bot_token'/'telegram_chat_id' em `configuracoes`). Na primeira
+    vez que o app roda com o suporte a múltiplos destinatários, se existir
+    essa configuração antiga e ainda não houver nenhum destinatário
+    cadastrado, criamos um destinatário a partir dela — assim quem já tinha
+    configurado o Telegram não perde nada nem precisa reconfigurar."""
+    if listar_destinatarios_telegram():
+        return
+    token_antigo = obter_config("telegram_bot_token")
+    chat_id_antigo = obter_config("telegram_chat_id")
+    if not token_antigo or not chat_id_antigo:
+        return
+    nome_antigo = obter_config("nome_usuario") or "Você"
+    ids_antigos = obter_config("telegram_empresas_ids")  # None = todas as empresas
+    if ids_antigos is None:
+        ids_antigos = ",".join(str(e["id"]) for e in listar_empresas())
+    novo_id = criar_destinatario_telegram(nome_antigo, token_antigo, chat_id_antigo, ids_antigos)
+    ultima_data = obter_config("ultima_notificacao_data")
+    if ultima_data:
+        definir_ultima_notificacao_destinatario(novo_id, ultima_data)
