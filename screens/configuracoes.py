@@ -36,6 +36,15 @@ nome_atual = db.obter_config("nome_usuario", "")
 token_atual = db.obter_config("telegram_bot_token", "")
 chat_id_atual = db.obter_config("telegram_chat_id", "")
 
+empresas = db.listar_empresas()
+ids_salvos_str = db.obter_config("telegram_empresas_ids")  # None = nunca configurado ainda
+if ids_salvos_str is None:
+    # Sem nada salvo ainda = alerta pra todas as empresas (comportamento padrão).
+    empresas_selecionadas_padrao = list(empresas)
+else:
+    ids_salvos = {int(i) for i in ids_salvos_str.split(",") if i.strip().isdigit()}
+    empresas_selecionadas_padrao = [e for e in empresas if e["id"] in ids_salvos]
+
 with st.form("form_config_telegram"):
     nome_usuario = st.text_input(
         "Seu nome (pra personalizar a mensagem, opcional)",
@@ -49,12 +58,26 @@ with st.form("form_config_telegram"):
     chat_id = st.text_input(
         "Chat ID", value=chat_id_atual or "", placeholder="Ex: 987654321",
     )
+    if empresas:
+        empresas_escolhidas = st.multiselect(
+            "De quais empresas você quer receber alerta de ponto pendente?",
+            options=empresas,
+            default=empresas_selecionadas_padrao,
+            format_func=lambda e: e["nome"],
+            help="Deixe todas marcadas pra continuar recebendo alerta de "
+            "qualquer empresa, ou desmarque as que não quer ser avisada.",
+        )
+    else:
+        empresas_escolhidas = []
+        st.caption("Cadastre uma empresa primeiro pra poder escolher aqui.")
     salvar = st.form_submit_button("💾 Salvar configurações")
 
 if salvar:
     db.definir_config("nome_usuario", nome_usuario.strip())
     db.definir_config("telegram_bot_token", token.strip())
     db.definir_config("telegram_chat_id", chat_id.strip())
+    ids_escolhidos = ",".join(str(e["id"]) for e in empresas_escolhidas)
+    db.definir_config("telegram_empresas_ids", ids_escolhidos)
     st.success("Configurações salvas!")
     st.rerun()
 
