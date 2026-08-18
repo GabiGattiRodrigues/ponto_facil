@@ -71,6 +71,14 @@ def main():
         print("Nenhuma empresa cadastrada. Nada a notificar.")
         return
 
+    ids_selecionados_str = db.obter_config("telegram_empresas_ids")  # None = todas
+    if ids_selecionados_str is not None:
+        ids_selecionados = {int(i) for i in ids_selecionados_str.split(",") if i.strip().isdigit()}
+        empresas = [e for e in empresas if e["id"] in ids_selecionados]
+        if not empresas:
+            print("Nenhuma empresa selecionada pra receber alerta (veja Configurações no app). Nada a notificar.")
+            return
+
     blocos = []
     for empresa in empresas:
         faltando = utils.dias_uteis_sem_registro(empresa, janela_dias=14)
