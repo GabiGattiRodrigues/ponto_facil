@@ -1,0 +1,44 @@
+name: Lembrete de ponto (Telegram)
+
+# Roda de forma independente do seu computador, direto nos servidores do
+# GitHub — não precisa do seu PC ligado nem do site aberto.
+#
+# Horário: 21:00 UTC = 18:00 no horário de Brasília (UTC-3), de segunda a
+# sexta. Ajuste o "cron" abaixo se quiser outro horário (lembre-se: sempre
+# em UTC). Você também pode rodar manualmente pela aba "Actions" do GitHub
+# (botão "Run workflow"), o que é ótimo pra testar a configuração.
+
+on:
+  schedule:
+    - cron: "0 21 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      forcar:
+        description: "Forçar reenvio mesmo se já notificado hoje"
+        type: boolean
+        default: false
+
+jobs:
+  notificar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências
+        run: pip install holidays psycopg2-binary
+
+      - name: Rodar verificação e enviar lembrete (se necessário)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ "${{ inputs.forcar }}" = "true" ]; then
+            python notificar_pendencias.py --forcar
+          else
+            python notificar_pendencias.py
+          fi

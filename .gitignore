@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+venv/
+data/ponto.db
+data/anexos/
+.streamlit/secrets.toml
+_to_delete_zip

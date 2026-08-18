@@ -1,0 +1,5 @@
+streamlit>=1.38
+holidays>=0.55
+pandas>=2.0
+plotly>=5.20
+psycopg2-binary>=2.9
