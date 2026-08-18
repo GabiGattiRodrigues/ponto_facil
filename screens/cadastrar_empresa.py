@@ -19,6 +19,13 @@ with st.form("form_cadastro_empresa", clear_on_submit=True):
     with col1:
         nome = st.text_input("Nome da empresa *")
         cidade = st.text_input("Cidade *")
+        responsavel = st.text_input(
+            "Responsável (opcional)",
+            placeholder="Ex: Você, Marido...",
+            help="Quem trabalha nessa empresa — usado pra filtrar de qual "
+            "empresa cada pessoa recebe alerta no Telegram (tela "
+            "Configurações). Pode deixar em branco.",
+        )
     with col2:
         uf = st.selectbox(
             "Estado (UF) *",
@@ -51,7 +58,7 @@ if enviado:
     if not nome.strip() or not cidade.strip():
         st.error("Preencha nome e cidade da empresa.")
     else:
-        empresa_id = db.criar_empresa(nome, cidade, uf, carga_horaria, intervalo_almoco)
+        empresa_id = db.criar_empresa(nome, cidade, uf, carga_horaria, intervalo_almoco, responsavel)
         st.success(
             f"Empresa **{nome}** cadastrada! Já pode ir em "
             "**🕒 Bater Ponto** para registrar o dia."
@@ -77,6 +84,23 @@ else:
                 if st.button("🗑️ Excluir", key=f"excluir_{empresa['id']}"):
                     db.excluir_empresa(empresa["id"])
                     st.warning(f"Empresa {empresa['nome']} excluída (junto com pontos e feriados).")
+                    st.rerun()
+
+            with st.form(f"form_responsavel_{empresa['id']}"):
+                col_resp, col_botao = st.columns([3, 1])
+                with col_resp:
+                    novo_responsavel = st.text_input(
+                        "Responsável",
+                        value=empresa["responsavel"] or "",
+                        placeholder="Ex: Você, Marido...",
+                        key=f"responsavel_{empresa['id']}",
+                        label_visibility="collapsed",
+                    )
+                with col_botao:
+                    salvar_responsavel = st.form_submit_button("💾 Salvar responsável")
+                if salvar_responsavel:
+                    db.definir_responsavel_empresa(empresa["id"], novo_responsavel)
+                    st.success("Responsável atualizado!")
                     st.rerun()
 
             # Pré-visualização dos feriados nacionais/estaduais do ano atual
