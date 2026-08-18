@@ -258,7 +258,6 @@ def _migrar_colunas_antigas(conn):
         # usada, mas deixamos ela existir sem problema (não apagamos dados).
         pass
 
-
 # ---------------------------------------------------------------------------
 # Empresas
 # ---------------------------------------------------------------------------
